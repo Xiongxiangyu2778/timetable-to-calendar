@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>课表转日历 · 早八自动化</title>
+<meta name="description" content="粘贴课表，一键生成手机日历可导入的 .ics 文件。苹果、安卓通用，无需安装。">
+<style>
+  :root{
+    --navy:#0f172a; --navy2:#1e293b; --cyan:#38bdf8; --cyan2:#0ea5e9;
+    --bg:#f1f5f9; --card:#ffffff; --text:#0f172a; --muted:#64748b; --line:#e2e8f0;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.6; padding-bottom:40px;
+  }
+  header{
+    background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);
+    color:#fff; padding:32px 20px 40px; position:relative; overflow:hidden;
+  }
+  header::after{
+    content:""; position:absolute; right:-50px; top:-60px; width:200px; height:200px;
+    border-radius:50%; background:rgba(56,189,248,.15);
+  }
+  .badge{
+    display:inline-block; font-size:12px; letter-spacing:1px; color:var(--cyan);
+    border:1px solid rgba(56,189,248,.4); border-radius:999px; padding:3px 10px; margin-bottom:12px;
+  }
+  h1{font-size:26px; margin:0 0 6px; letter-spacing:1px}
+  header p{margin:0; color:#94a3b8; font-size:14px}
+  main{max-width:680px; margin:-20px auto 0; padding:0 16px; position:relative; z-index:2}
+  .card{
+    background:var(--card); border-radius:16px; padding:18px;
+    box-shadow:0 6px 24px rgba(15,23,42,.08); margin-bottom:14px;
+  }
+  label{display:block; font-size:14px; color:var(--muted); margin:12px 0 6px}
+  label:first-child{margin-top:0}
+  input[type=date], textarea{
+    width:100%; border:1px solid var(--line); border-radius:10px; padding:12px;
+    font-size:15px; font-family:inherit; color:var(--text); background:#f8fafc;
+  }
+  textarea{min-height:180px; resize:vertical; line-height:1.7; font-family:ui-monospace,Menlo,monospace; font-size:13px}
+  input[type=date]:focus, textarea:focus{outline:none; border-color:var(--cyan); background:#fff}
+  .row{display:flex; gap:10px; margin-top:16px}
+  button{
+    flex:1; border:none; border-radius:12px; padding:14px; font-size:16px; font-weight:600;
+    background:var(--cyan); color:#082f49; cursor:pointer; transition:.15s;
+  }
+  button:active{transform:scale(.98)}
+  button.ghost{background:#e2e8f0; color:#334155; flex:0 0 110px; font-weight:500}
+  .hint{font-size:12px; color:var(--muted); margin:10px 0 0}
+  .hidden{display:none}
+  h2{font-size:17px; margin:0 0 8px}
+  #summary{font-size:14px; color:#334155; margin:0 0 10px}
+  ol#preview{margin:0; padding-left:20px; font-size:13px; color:#475569}
+  ol#preview li{margin:4px 0}
+  a{color:var(--cyan2)}
+  details summary{cursor:pointer; font-weight:600; font-size:15px}
+  details p, details li{font-size:14px; color:#475569}
+  footer{text-align:center; font-size:12px; color:#94a3b8; margin-top:24px}
+  .err{color:#dc2626; font-size:14px; margin-top:10px}
+  @media (max-width:420px){ h1{font-size:22px} header{padding:26px 16px 36px} }
+</style>
+</head>
+<body>
+<header>
+  <div class="badge">早八自动化</div>
+  <h1>课表转日历</h1>
+  <p>粘贴课表 → 生成 .ics → 手机日历一键导入</p>
+</header>
+
+<main>
+  <section class="card">
+    <label for="start">学期开始（第一周的周一）</label>
+    <input type="date" id="start" value="2026-02-23">
+
+    <label for="input">课表（一行一门课，用 | 分隔）</label>
+    <textarea id="input" placeholder="高等数学 | 周一 | 1-2 | 1-16 | 教1-101 | 张老师
+大学英语 | 周二 | 3-4 | 1-16单 | 外语楼203 | 李老师"></textarea>
+
+    <div class="row">
+      <button id="gen">生成日历文件</button>
+      <button id="demo" class="ghost">填入示例</button>
+    </div>
+    <p class="hint">星期：周一 / 星期一 / 1 ｜ 节次：1-2、3,4、5 ｜ 周次：1-16、1-16单、2-16双、1,3,5,7</p>
+    <div id="error" class="err"></div>
+  </section>
+
+  <section id="result" class="card hidden">
+    <h2>✓ 生成成功</h2>
+    <p id="summary"></p>
+    <ol id="preview"></ol>
+    <p class="hint">没有自动下载？<a id="dl" href="#" download="我的课表.ics">点这里下载 我的课表.ics</a></p>
+  </section>
+
+  <details class="card">
+    <summary>导入方法（iPhone / 安卓）</summary>
+    <p><strong>iPhone：</strong>下载后点开 → 右上角「…」→ 用其他应用打开 → 选「日历」→ 全部添加。</p>
+    <p><strong>安卓：</strong>下载后点开 → 选「日历」导入；或在日历 App 里找「导入日程」。</p>
+    <p><strong>Google 日历：</strong>网页版 calendar.google.com → 设置 → 导入和导出 → 选 .ics。</p>
+    <p><strong>建议：</strong>先建一个叫「课表」的日历分组再导入，以后整组删除重导不会弄乱别的日程。</p>
+  </details>
+
+  <details class="card">
+    <summary>课表从哪来？</summary>
+    <p>从教务系统的「我的课表」页面，按“课程名 | 星期 | 节次 | 周次 | 教室 | 教师”的格式一行一门抄过来即可。</p>
+    <p>如果教务系统是标准网页表格，电脑版工具可以一键抓取（GitHub: chaoxing-auto-study）。</p>
+  </details>
+
+  <footer>课表只在本机处理，不上传任何服务器 · 早八自动化</footer>
+</main>
+
+<script>
+/* ============ 解析（和 Python 版逻辑一致） ============ */
+const WEEK_CN = {'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6};
+const WEEK_ALIAS = {'周一':0,'星期一':0,'礼拜一':0,'周二':1,'星期二':1,'礼拜二':1,
+  '周三':2,'星期三':2,'礼拜三':2,'周四':3,'星期四':3,'礼拜四':3,
+  '周五':4,'星期五':4,'礼拜五':4,'周六':5,'星期六':5,'礼拜六':5,
+  '周日':6,'星期日':6,'周天':6,'礼拜日':6};
+
+function parseWeekday(s){
+  const t = String(s||'').trim();
+  for (const k in WEEK_ALIAS) if (t.includes(k)) return WEEK_ALIAS[k];
+  const m = t.match(/[周星期礼拜]\s*([一二三四五六日天1-7])/);
+  if (m) return /[1-7]/.test(m[1]) ? parseInt(m[1],10)-1 : WEEK_CN[m[1]];
+  if (/^[1-7]$/.test(t)) return parseInt(t,10)-1;
+  return null;
+}
+function parsePeriods(s){
+  const t = String(s||'').replace(/[节第]/g,'');
+  const out = new Set();
+  t.split(/[,，、\s]+/).forEach(part => {
+    if (!part) return;
+    const m = part.match(/^(\d+)\s*[-~至]\s*(\d+)$/);
+    if (m) {
+      const a = +m[1], b = +m[2];
+      for (let i = Math.min(a,b); i <= Math.max(a,b); i++) out.add(i);
+    } else if (/^\d+$/.test(part)) out.add(+part);
+  });
+  return [...out].sort((a,b)=>a-b);
+}
+function parseWeeks(s){
+  const t = String(s||'').replace(/[周第]/g,'');
+  const out = new Set();
+  t.split(/[,，、\s]+/).forEach(part => {
+    if (!part) return;
+    let parity = null;
+    if (part.includes('单')) parity = 1;
+    else if (part.includes('双')) parity = 0;
+    const core = part.replace(/[单双]/g,'');
+    const m = core.match(/^(\d+)\s*[-~至]\s*(\d+)$/);
+    if (m) {
+      const a = +m[1], b = +m[2];
+      for (let w = Math.min(a,b); w <= Math.max(a,b); w++) {
+        if (parity === null || w % 2 === parity) out.add(w);
+      }
+    } else if (/^\d+$/.test(core)) {
+      const w = +core;
+      if (parity === null || w % 2 === parity) out.add(w);
+    }
+  });
+  return [...out].sort((a,b)=>a-b);
+}
+function parseCourses(text){
+  const list = [];
+  text.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) return;
+    if (!line.includes('|')) return;
+    const cols = line.split('|').map(s=>s.trim());
+    if (cols.length < 4) return;
+    const name = cols[0];
+    const weekday = parseWeekday(cols[1]);
+    const periods = parsePeriods(cols[2]);
+    const weeks = parseWeeks(cols[3]);
+    if (!name || weekday === null || !periods.length || !weeks.length) return;
+    list.push({ name, weekday, periods, weeks,
+      room: cols[4] || '', teacher: cols[5] || '' });
+  });
+  return list;
+}
+
+/* ============ 作息表（可自行修改） ============ */
+const PERIODS = {
+  1:['08:00','08:45'], 2:['08:55','09:40'],
+  3:['10:00','10:45'], 4:['10:55','11:40'],
+  5:['14:00','14:45'], 6:['14:55','15:40'],
+  7:['16:00','16:45'], 8:['16:55','17:40'],
+  9:['19:00','19:45'], 10:['19:55','20:40'],
+  11:['20:50','21:35'],12:['21:45','22:30'],
+};
+
+/* ============ 生成 ICS ============ */
+function pad(n){ return String(n).padStart(2,'0'); }
+function fmtDate(d){ return d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()); }
+function esc(s){
+  return String(s).replace(/\\/g,'\\\\').replace(/;/g,'\\;')
+    .replace(/,/g,'\\,').replace(/\n/g,'\\n');
+}
+function foldLine(line){
+  const enc = new TextEncoder();
+  if (enc.encode(line).length <= 73) return [line];
+  const out = []; let buf = '', size = 0;
+  for (const ch of line){
+    const b = enc.encode(ch).length;
+    if (size + b > 73){ out.push(buf); buf = ' ' + ch; size = 1 + b; }
+    else { buf += ch; size += b; }
+  }
+  if (buf) out.push(buf);
+  return out;
+}
+function buildICS(courses, startDate){
+  const now = new Date();
+  const stamp = now.getUTCFullYear() + pad(now.getUTCMonth()+1) + pad(now.getUTCDate())
+    + 'T' + pad(now.getUTCHours()) + pad(now.getUTCMinutes()) + pad(now.getUTCSeconds()) + 'Z';
+  const lines = [
+    'BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//早八自动化//课表转日历 Web//CN',
+    'CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:我的课表','X-WR-TIMEZONE:Asia/Shanghai'
+  ];
+  let total = 0;
+  for (const c of courses){
+    const p1 = c.periods[0], p2 = c.periods[c.periods.length-1];
+    if (!PERIODS[p1] || !PERIODS[p2]) continue;
+    const t1 = PERIODS[p1][0], t2 = PERIODS[p2][1];
+    for (const w of c.weeks){
+      const d = new Date(startDate.getTime());
+      d.setDate(d.getDate() + (w-1)*7 + c.weekday);
+      const ds = fmtDate(d) + 'T' + t1.replace(':','') + '00';
+      const de = fmtDate(d) + 'T' + t2.replace(':','') + '00';
+      lines.push('BEGIN:VEVENT','UID:' + Math.random().toString(36).slice(2) + w + '@zaoba-web',
+        'DTSTAMP:' + stamp, 'DTSTART:' + ds, 'DTEND:' + de,
+        'SUMMARY:' + esc(c.name));
+      if (c.room) lines.push('LOCATION:' + esc(c.room));
+      lines.push('DESCRIPTION:' + esc((c.teacher ? '教师：' + c.teacher + '｜' : '') + '周次：第 ' + w + ' 周'));
+      lines.push('BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',
+        'DESCRIPTION:' + esc('15 分钟后上课：' + c.name),'END:VALARM','END:VEVENT');
+      total++;
+    }
+  }
+  lines.push('END:VCALENDAR');
+  const folded = [];
+  lines.forEach(l => folded.push(...foldLine(l)));
+  return { text: folded.join('\r\n') + '\r\n', total };
+}
+
+/* ============ 页面交互 ============ */
+const $ = id => document.getElementById(id);
+const DEMO = `高等数学 | 周一 | 1-2 | 1-16 | 教1-101 | 张老师
+大学英语 | 周二 | 3-4 | 1-16单 | 外语楼203 | 李老师
+体育（篮球） | 周三 | 5-6 | 2-16双 | 体育馆 | 王老师
+数据库原理与应用 | 周四 | 3-4 | 1-8 | 信息楼305 | 刘老师
+马克思主义基本原理 | 周五 | 1-2 | 1-12 | 教2-201 | 陈老师
+人工智能导论 | 周四 | 9-10 | 3-10 | 线上 | 无`;
+
+$('demo').addEventListener('click', () => { $('input').value = DEMO; $('error').textContent=''; });
+
+$('gen').addEventListener('click', () => {
+  const err = $('error'); err.textContent = '';
+  const dateStr = $('start').value;
+  if (!dateStr){ err.textContent = '请先选择学期开始日期'; return; }
+  const start = new Date(dateStr + 'T00:00:00');
+  if (start.getDay() !== 1){
+    // 自动对齐到当周周一
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  }
+  const courses = parseCourses($('input').value);
+  if (!courses.length){ err.textContent = '没解析到课程，检查是否用 | 分隔、字段是否齐全'; return; }
+
+  const { text, total } = buildICS(courses, start);
+  const blob = new Blob([text], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+
+  const a = $('dl'); a.href = url; a.download = '我的课表.ics';
+  const click = document.createElement('a');
+  click.href = url; click.download = '我的课表.ics';
+  document.body.appendChild(click); click.click(); document.body.removeChild(click);
+
+  // 预览
+  $('summary').textContent = `共 ${courses.length} 门课，生成 ${total} 条上课提醒（提前 15 分钟）。`;
+  const ol = $('preview'); ol.innerHTML = '';
+  const wdName = '一二三四五六日';
+  courses.slice().sort((x,y)=>x.weekday-y.weekday||x.periods[0]-y.periods[0]).forEach(c=>{
+    const li = document.createElement('li');
+    const p2 = c.periods[c.periods.length-1];
+    const period = c.periods[0] === p2 ? c.periods[0] : c.periods[0] + '-' + p2;
+    li.textContent = `周${wdName[c.weekday]} 第${period}节 · ${c.name}${c.room ? ' · ' + c.room : ''}`;
+    ol.appendChild(li);
+  });
+  $('result').classList.remove('hidden');
+  $('result').scrollIntoView({ behavior:'smooth', block:'start' });
+});
+</script>
+</body>
+</html>
