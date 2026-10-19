@@ -96,11 +96,11 @@
     <div class="pane" id="pane-file">
       <div class="drop" id="drop">
         <b>点击选择文件</b> 或把文件拖到这里<br>
-        支持 .xlsx / .xls / .csv
+        支持 .xlsx / .xls / .csv / .pdf
       </div>
-      <input type="file" id="file" accept=".xlsx,.xls,.csv" class="hidden">
+      <input type="file" id="file" accept=".xlsx,.xls,.csv,.pdf" class="hidden">
       <p class="hint">Excel 支持两种表头：<b>星期×节次网格</b>（教务系统导出）或
-        <b>课程名/星期/节次/周次/教室/教师</b> 列表</p>
+        <b>课程名/星期/节次/周次/教室/教师</b> 列表；PDF 需是<b>能选中文字</b>的（扫描件/图片版不支持）</p>
     </div>
 
     <div class="row">
@@ -154,6 +154,7 @@
 </main>
 
 <script src="vendor/xlsx.full.min.js" defer></script>
+<script src="vendor/pdf.min.js" defer></script>
 <script>
 /* ======================= 基础解析 ======================= */
 const WEEK_CN = {'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6};
@@ -494,6 +495,171 @@ drop.ondrop = e => {
 };
 fileInput.onchange = () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); };
 
+/* ======================= PDF 解析 ======================= */
+/* PDF 里没有「表格」，只有一堆带坐标的文字。这里的做法：
+   ① 先按 y 坐标把文字聚成行；
+   ② 认出含「星期一~日」的表头，用它的 x 中心算出每一列的左右边界；
+   ③ 左侧那一列（节次列）的每个单元格给出一条「第几节」的 y 区间，
+      再把右边各列的文字按 y 塞进对应的节次行 → 得到一个个「单元格文字」；
+   ④ 单元格文字交给 parseCellText（和 Excel 那条路完全同一套规则）。
+   找不到表头就退回「按行 + 横向间距切列」的通用做法，再不行就整页当文本解析。 */
+const PDF_WD_RE = /^(?:星期|周|礼拜)\s*([一二三四五六日天])$/;
+
+function pdfToLines(items){
+  const lines = [];
+  for (const it of items){
+    const x = it.transform[4], y = it.transform[5];
+    const h = Math.abs(it.transform[3]) || it.height || 10;
+    let line = lines.find(l => Math.abs(l.y - y) <= Math.max(2.5, h * 0.45));
+    if (!line){ line = {y, h, items: []}; lines.push(line); }
+    line.items.push({x, w: it.width || h * 0.9, s: it.str});
+  }
+  lines.sort((a, b) => b.y - a.y);
+  lines.forEach(l => l.items.sort((a, b) => a.x - b.x));
+  return lines;
+}
+
+function lineText(items){
+  let out = '', lastEnd = null;
+  for (const it of items){
+    const gap = lastEnd === null ? 0 : it.x - lastEnd;
+    if (lastEnd !== null && gap > Math.max(2, it.w ? 2 : 2) && gap > 2.5) out += ' ';
+    out += it.s;
+    lastEnd = it.x + it.w;
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/* 从一列文字里按 y 聚出「单元格」：行内间距很小，跨单元格会有明显空隙 */
+function clusterCells(items, gapLimit){
+  const out = [];
+  let cur = null, lastY = null;
+  const sorted = [...items].sort((a, b) => b.y - a.y);
+  for (const it of sorted){
+    if (!cur || (lastY !== null && lastY - it.y > gapLimit)){
+      cur = {items: [], gapSplit: false};
+      out.push(cur);
+    } else if (lastY !== null && lastY - it.y > gapLimit * 0.8){
+      cur.gapSplit = true;
+    }
+    cur.items.push(it);
+    lastY = it.y;
+  }
+  return out;
+}
+
+function cellsToText(cell){
+  const lines = [];
+  let lastY = null;
+  for (const it of [...cell.items].sort((a, b) => b.y - a.y)){
+    const last = lines[lines.length - 1];
+    if (last && Math.abs(last.y - it.y) <= 2.5){ last.items.push(it); continue; }
+    lines.push({y: it.y, items: [it]});
+  }
+  return lines.map(l => lineText(l.items)).filter(Boolean).join('\n');
+}
+
+function pdfGridCourses(lines){
+  const courses = [];
+  // 表头：同一行里 ≥3 个「星期X」
+  let head = null;
+  for (const l of lines){
+    const cells = l.items.filter(it => PDF_WD_RE.test(it.s.trim()));
+    if (cells.length >= 3){ head = {line: l, cells}; break; }
+  }
+  if (!head) return {courses, rows: null};
+  const weekdays = head.cells.map(c => parseWeekday(c.s.trim()));
+  const centers = head.cells.map(c => c.x + c.w / 2);
+  const bounds = [];
+  for (let i = 0; i < centers.length - 1; i++) bounds.push((centers[i] + centers[i + 1]) / 2);
+  const labelRight = centers[0] - (centers[1] - centers[0]) / 2;
+
+  const after = lines.filter(l => l.y < head.line.y - 1);
+  // 节次列：表头左边的所有文字
+  const labelItems = [];
+  const colItems = weekdays.map(() => []);
+  for (const l of after){
+    for (const it of l.items){
+      const c = it.x + it.w / 2;
+      if (c < labelRight){ labelItems.push({...it, y: l.y}); continue; }
+      let ci = 0;
+      while (ci < bounds.length && c > bounds[ci]) ci++;
+      colItems[ci].push({...it, y: l.y});
+    }
+  }
+  if (!labelItems.length) return {courses, rows: null};
+
+  const h = head.line.h || 10;
+  const labelCells = clusterCells(labelItems, h * 3.2)
+    .map(cell => ({text: cellsToText(cell), items: cell.items}))
+    .filter(c => c.text);
+  if (labelCells.length < 2) return {courses, rows: null};
+  const centersY = labelCells.map(c => c.items.reduce((s, it) => s + it.y, 0) / c.items.length);
+  const yBounds = [];
+  for (let i = 0; i < centersY.length - 1; i++) yBounds.push((centersY[i] + centersY[i + 1]) / 2);
+
+  labelCells.forEach((lc, ri) => {
+    const top = ri === 0 ? Infinity : yBounds[ri - 1];
+    const bottom = ri === yBounds.length ? -Infinity : yBounds[ri];
+    let ps = parseLabelPeriods(lc.text.split('\n')[0]);
+    if (!ps || !ps.length) ps = parseLabelPeriods(lc.text);
+    if (!ps || !ps.length) ps = [ri + 1];
+    colItems.forEach((items, ci) => {
+      const inRow = items.filter(it => it.y <= top && it.y > bottom);
+      if (!inRow.length) return;
+      const cells = clusterCells(inRow, h * 2.4);
+      for (const cell of cells){
+        const text = cellsToText(cell);
+        if (!text) continue;
+        courses.push(...parseCellText(text, weekdays[ci], ps));
+      }
+    });
+  });
+  return {courses, rows: null};
+}
+
+/* 兜底：按行 + 横向间距切列，产出二维数组（交给 parseGrid / parseSmartText） */
+function pdfLinesToRows(lines){
+  const rows = [];
+  for (const l of lines){
+    const row = [];
+    let cur = '', lastEnd = null;
+    const gapLimit = Math.max(5, l.h * 0.8);
+    for (const it of l.items){
+      const gap = lastEnd === null ? 0 : it.x - lastEnd;
+      if (lastEnd !== null && gap > gapLimit){ row.push(cur.trim()); cur = ''; }
+      cur += it.s;
+      lastEnd = it.x + it.w;
+    }
+    if (cur.trim()) row.push(cur.trim());
+    if (row.some(c => c)) rows.push(row);
+  }
+  return rows;
+}
+
+async function parsePdfFile(file){
+  if (typeof pdfjsLib === 'undefined') throw new Error('PDF 解析库没加载成功，请刷新页面重试');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+  const data = new Uint8Array(await file.arrayBuffer());
+  const doc = await pdfjsLib.getDocument({data, isEvalSupported: false}).promise;
+  const allRows = [], allCourses = [];
+  try {
+    for (let p = 1; p <= doc.numPages; p++){
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      const items = tc.items.filter(it => it.str && it.str.trim());
+      if (!items.length) continue;
+      const lines = pdfToLines(items);
+      const grid = pdfGridCourses(lines);
+      if (grid.courses.length) allCourses.push(...grid.courses);
+      allRows.push(...pdfLinesToRows(lines));
+    }
+  } finally {
+    doc.destroy();
+  }
+  return {courses: allCourses, rows: allRows};
+}
+
 async function handleFile(file){
   $('error').textContent = '';
   const name = file.name.toLowerCase();
@@ -508,8 +674,28 @@ async function handleFile(file){
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
       doParse(rows);
+    } else if (name.endsWith('.pdf')){
+      $('parseInfo').textContent = '正在读取 PDF…';
+      const {courses: fromPdf, rows} = await parsePdfFile(file);
+      $('parseInfo').textContent = '';
+      let list = fromPdf;
+      if (!rows.length && !list.length){
+        $('error').textContent = '这个 PDF 里没有可提取的文字，可能是扫描件/图片版。请用 WPS 另存为 Excel，或截图后用「粘贴」方式。';
+        return;
+      }
+      if (!list.length) list = parseGrid(rows);
+      if (!list.length) list = parseSmartText(rows.map(r => r.join('\t')).join('\n'));
+      if (!list.length){
+        $('error').textContent = 'PDF 里读到文字，但没认出课表结构。可以点「填入示例」看格式，或把 PDF 转成 Excel 再传。';
+        return;
+      }
+      courses = mergeCourses(list);
+      renderTable();
+      $('previewCard').classList.remove('hidden');
+      $('parseInfo').textContent = `解析成功：${courses.length} 门次课程（来自 PDF），请核对后生成`;
+      $('previewCard').scrollIntoView({behavior:'smooth', block:'start'});
     } else {
-      $('error').textContent = '只支持 .xlsx / .xls / .csv';
+      $('error').textContent = '只支持 .xlsx / .xls / .csv / .pdf';
     }
   } catch (e){
     $('error').textContent = '文件解析失败：' + e.message;
