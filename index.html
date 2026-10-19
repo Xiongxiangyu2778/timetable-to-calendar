@@ -433,12 +433,22 @@ function buildICS(courses, startDate){
     const p1 = c.periods[0], p2 = c.periods[c.periods.length-1];
     if (!PERIODS[p1] || !PERIODS[p2]) continue;
     const t1 = PERIODS[p1][0], t2 = PERIODS[p2][1];
+    // ⚠ 时区修复：以前写浮点本地时间（不带 Z），部分手机日历当成 UTC 读入
+    // → 全部事件 +8 小时、晚课跨到第二天。现在按北京时间换算成 UTC（带 Z）。
+    // Date.UTC 按「把输入当北京时间」计算，与打开网页的设备时区无关。
+    const toUTC = (d, hm) => {
+      const [h, mi] = hm.split(':').map(Number);
+      const ms = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate(), h, mi) - 8*3600*1000;
+      const u = new Date(ms);
+      return u.getUTCFullYear()+pad(u.getUTCMonth()+1)+pad(u.getUTCDate())
+        +'T'+pad(u.getUTCHours())+pad(u.getUTCMinutes())+'00Z';
+    };
     for (const w of c.weeks){
       const d = new Date(startDate.getTime());
       d.setDate(d.getDate() + (w-1)*7 + c.weekday);
       lines.push('BEGIN:VEVENT','UID:'+Math.random().toString(36).slice(2)+w+'@zaoba-web',
-        'DTSTAMP:'+stamp,'DTSTART:'+fmtDate(d)+'T'+t1.replace(':','')+'00',
-        'DTEND:'+fmtDate(d)+'T'+t2.replace(':','')+'00','SUMMARY:'+esc(c.name));
+        'DTSTAMP:'+stamp,'DTSTART:'+toUTC(d,t1),
+        'DTEND:'+toUTC(d,t2),'SUMMARY:'+esc(c.name));
       if (c.room) lines.push('LOCATION:'+esc(c.room));
       lines.push('DESCRIPTION:'+esc((c.teacher?'教师：'+c.teacher+'｜':'')+'周次：第 '+w+' 周'));
       lines.push('BEGIN:VALARM','TRIGGER:-PT15M','ACTION:DISPLAY',
